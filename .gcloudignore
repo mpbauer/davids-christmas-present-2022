@@ -1,0 +1,4 @@
+# ---------------------------------------------------------------------------------------------------------- #
+# This file tells gcloud which files should not be uploaded  Google Cloud Build, without it, it defaults
+# to .gitignore that usually exclude the target directory where you packaged application has been created.
+# ---------------------------------------------------------------------------------------------------------- #

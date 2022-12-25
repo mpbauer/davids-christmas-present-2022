@@ -1,0 +1,86 @@
+name: Main Workflow
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      # Clone git project
+      - name: 'Clone Git Project'
+        uses: actions/checkout@v3
+        with:
+          # Loads full history which is required for semantic versioning
+          fetch-depth: 0
+
+      - name: 'Initialize mandatory git config'
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+
+      - name: 'Determine next semver tag'
+        uses: paulhatch/semantic-version@v4.0.3
+        id: 'semantic-version'
+        with:
+          tag_prefix: "v"
+          major_pattern: "(MAJOR)"
+          minor_pattern: "(MINOR)"
+          format: "${major}.${minor}.${patch}"
+          short_tags: false
+          bump_each_commit: false
+
+      - name: 'Print semver details'
+        run: |
+          echo "Major version: ${{ steps.semantic-version.outputs.major }}"
+          echo "Minor version: ${{ steps.semantic-version.outputs.minor }}"
+          echo "Patch version: ${{ steps.semantic-version.outputs.patch }}"
+          echo "Increment version: ${{ steps.semantic-version.outputs.increment }}"
+          echo "Semver version: ${{ steps.semantic-version.outputs.version }}"
+          echo "Semver version tag: ${{ steps.semantic-version.outputs.version_tag }}"
+
+      - name: 'Authenticate to Google Cloud'
+        id: 'auth'
+        uses: 'google-github-actions/auth@v0'
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+
+      # Setup gcloud CLI
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v0
+
+      # Configure docker to use the gcloud command-line tool as a credential helper
+      - name: 'Configure Docker Credentials'
+        run: |
+          gcloud --quiet auth configure-docker
+
+      # Build & publish the container image with Google Cloud Build (europe-west1 == belgium)
+      - name: 'Build & publish Docker Image'
+        env:
+          NEW_SEMVER_VERSION_TAG: ${{ steps.semantic-version.outputs.version_tag }}
+        run: |
+          gcloud config set project ${{ secrets.GCP_PROJECT_ID }}
+          gcloud builds submit --tag gcr.io/${{ secrets.GCP_PROJECT_ID }}/davids-christmas-present-2022:${{ env.NEW_SEMVER_VERSION_TAG }}
+          gcloud config set run/region europe-west1
+
+      - name: 'Create Git tag'
+        env:
+          NEW_SEMVER_VERSION_TAG: ${{ steps.semantic-version.outputs.version_tag }}
+        run: |
+          git tag -a ${{ env.NEW_SEMVER_VERSION_TAG }} -m "New release"
+          echo "Pushing git tag '${{ env.NEW_SEMVER_VERSION_TAG }}' to GitHub ..."
+          git push --tags
+
+      # Deploy the Docker image to Google Cloud Run
+      - name: 'Deploy to Cloud Run'
+        env:
+          NEW_SEMVER_VERSION_TAG: ${{ steps.semantic-version.outputs.version_tag }}
+        run: |
+          gcloud run deploy davids-christmas-present-2022 --image gcr.io/${{ secrets.GCP_PROJECT_ID }}/davids-christmas-present-2022:${{ env.NEW_SEMVER_VERSION_TAG }} \
+          --platform managed \
+          --allow-unauthenticated \
+          --memory 1024M \
+          --cpu 1
